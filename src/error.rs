@@ -35,7 +35,19 @@ pub enum GitError {
 
     /// The provided path could not be converted to a UTF-8 string, which was required
     /// for constructing the git command arguments in this specific context.
-    /// Note: Prefer using methods that accept `AsRef<OsStr>` where possible.
     #[error("Path contains non-UTF8 characters and cannot be used as a string argument: {0:?}")]
     PathEncodingError(std::path::PathBuf),
+
+    #[error("Commit hash is invalid: {0}")]
+    InvalidCommitHash(String),
+
+    #[error("Remote name is invalid: {0}")]
+    InvalidRemoteName(String),
+
+    #[error("Stash reference is invalid: {0}")]
+    InvalidStashRef(String),
+
+    /// The 'git' executable was not found in the system's PATH.
+    #[error("'git' command not found. Please ensure Git is installed and that its executable is included in your system's PATH environment variable.")]
+    GitNotFound,
 }

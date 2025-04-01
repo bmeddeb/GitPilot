@@ -4,6 +4,7 @@ use once_cell::sync::Lazy; // Import Lazy
 use regex::Regex;
 #[cfg(feature = "serde")]
 use serde::{de, Deserialize, Deserializer};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::{
     ffi::OsStr, // Import OsStr
@@ -145,7 +146,179 @@ fn is_valid_reference_name(name: &str) -> bool {
         // Further rule: Cannot contain sequences like //, /*, ?, [*] - simplified check
         && !name.contains("//") && !name.contains("/*") && !name.contains('?') && !name.contains('[') && !name.contains(']')
 }
+// --- CommitHash Type ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommitHash {
+    value: String,
+}
 
+impl FromStr for CommitHash {
+    type Err = GitError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let len = s.len();
+        // Basic Git SHA-1 hash validation (4 to 40 hex chars)
+        if (len >= 4 && len <= 40) && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            Ok(CommitHash {
+                value: s.to_ascii_lowercase(), // Store consistently lowercase
+            })
+        } else {
+            Err(GitError::InvalidCommitHash(s.to_string()))
+        }
+    }
+}
+
+impl Display for CommitHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl AsRef<str> for CommitHash {
+    fn as_ref(&self) -> &str {
+        &self.value
+    }
+}
+
+impl AsRef<OsStr> for CommitHash {
+    fn as_ref(&self) -> &OsStr {
+        self.value.as_ref()
+    }
+}
+
+// --- Remote Type ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Remote {
+    value: String,
+}
+
+impl FromStr for Remote {
+    type Err = GitError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        // Basic validation: non-empty, no whitespace, no control characters.
+        // Git might allow more, but this covers common safe cases.
+        if !s.is_empty()
+            && !s
+                .chars()
+                .any(|c| c.is_ascii_whitespace() || c.is_ascii_control())
+        {
+            Ok(Remote {
+                value: s.to_string(),
+            })
+        } else {
+            Err(GitError::InvalidRemoteName(s.to_string()))
+        }
+    }
+}
+
+impl Display for Remote {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl AsRef<str> for Remote {
+    fn as_ref(&self) -> &str {
+        &self.value
+    }
+}
+
+impl AsRef<OsStr> for Remote {
+    fn as_ref(&self) -> &OsStr {
+        self.value.as_ref()
+    }
+}
+
+// --- Tag Type ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Tag {
+    value: String,
+}
+
+impl FromStr for Tag {
+    type Err = GitError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        // Tags follow standard Git reference naming rules
+        if is_valid_reference_name(s) {
+            Ok(Tag {
+                value: String::from(s),
+            })
+        } else {
+            // Reuse existing error variant for invalid refs
+            Err(GitError::InvalidRefName(s.to_string()))
+        }
+    }
+}
+
+impl Display for Tag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl AsRef<str> for Tag {
+    fn as_ref(&self) -> &str {
+        &self.value
+    }
+}
+
+impl AsRef<OsStr> for Tag {
+    fn as_ref(&self) -> &OsStr {
+        self.value.as_ref()
+    }
+}
+
+// --- Stash Type ---
+
+static STASH_REF_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^stash@\{(\d+)\}$").expect("Invalid static Stash Ref regex"));
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Stash {
+    value: String,
+    // index: usize, // Could parse and store index if needed later
+}
+
+impl FromStr for Stash {
+    type Err = GitError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        if STASH_REF_REGEX.is_match(s) {
+            // Optionally parse the index:
+            // let caps = STASH_REF_REGEX.captures(s).unwrap(); // Safe after is_match
+            // let index: usize = caps[1].parse().unwrap_or(usize::MAX); // Handle parse error?
+
+            Ok(Stash {
+                value: s.to_string(),
+                // index,
+            })
+        } else {
+            Err(GitError::InvalidStashRef(s.to_string()))
+        }
+    }
+}
+
+impl Display for Stash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl AsRef<str> for Stash {
+    fn as_ref(&self) -> &str {
+        &self.value
+    }
+}
+
+impl AsRef<OsStr> for Stash {
+    fn as_ref(&self) -> &OsStr {
+        self.value.as_ref()
+    }
+}
 // --- Tests ---
 
 #[cfg(test)]
@@ -276,4 +449,73 @@ mod tests {
             );
         }
     }
+}
+
+#[test]
+fn test_valid_commit_hash() {
+    assert!(CommitHash::from_str("deadbeef").is_ok());
+    assert!(CommitHash::from_str("1234567").is_ok());
+    assert!(CommitHash::from_str("abcdef0123456789abcdef0123456789abcdef01").is_ok());
+    assert_eq!(
+        CommitHash::from_str("DEADBEEF").unwrap().value,
+        "deadbeef" // Ensure lowercase storage
+    );
+}
+
+#[test]
+fn test_invalid_commit_hash() {
+    assert!(CommitHash::from_str("").is_err()); // Too short
+    assert!(CommitHash::from_str("abc").is_err()); // Too short
+    assert!(CommitHash::from_str("deadbeef_").is_err()); // Invalid char
+    assert!(CommitHash::from_str("gfedcba").is_err()); // Invalid hex char 'g'
+    assert!(CommitHash::from_str("abcdef0123456789abcdef0123456789abcdef01X").is_err());
+    // Too long (if 40 max)
+}
+
+#[test]
+fn test_valid_remote_name() {
+    assert!(Remote::from_str("origin").is_ok());
+    assert!(Remote::from_str("upstream").is_ok());
+    assert!(Remote::from_str("my-remote_1").is_ok());
+}
+
+#[test]
+fn test_invalid_remote_name() {
+    assert!(Remote::from_str("").is_err()); // Empty
+    assert!(Remote::from_str("my remote").is_err()); // Space
+    assert!(Remote::from_str("my\tremote").is_err()); // Tab
+    assert!(Remote::from_str("my/remote").is_ok()); // Slashes might be ok technically? Test git. Let's allow for now.
+    assert!(Remote::from_str("my\nremote").is_err()); // Control char
+}
+
+#[test]
+fn test_valid_tag_name() {
+    // Reuses branch name validation logic implicitly
+    assert!(Tag::from_str("v1.0.0").is_ok());
+    assert!(Tag::from_str("release/2025-03-31").is_ok());
+    assert!(Tag::from_str("my-tag").is_ok());
+}
+
+#[test]
+fn test_invalid_tag_name() {
+    // Reuses branch name validation logic implicitly
+    assert!(Tag::from_str("").is_err());
+    assert!(Tag::from_str("my tag").is_err()); // Space
+    assert!(Tag::from_str("inv@{lid").is_err()); // Invalid sequence
+}
+
+#[test]
+fn test_valid_stash_ref() {
+    assert!(Stash::from_str("stash@{0}").is_ok());
+    assert!(Stash::from_str("stash@{123}").is_ok());
+}
+
+#[test]
+fn test_invalid_stash_ref() {
+    assert!(Stash::from_str("").is_err());
+    assert!(Stash::from_str("stash@").is_err());
+    assert!(Stash::from_str("stash@{abc}").is_err());
+    assert!(Stash::from_str("stash{0}").is_err());
+    assert!(Stash::from_str("stash@{0").is_err());
+    assert!(Stash::from_str("my-stash@{0}").is_err());
 }
