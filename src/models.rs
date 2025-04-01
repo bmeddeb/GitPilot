@@ -2,7 +2,6 @@
 
 // Updated imports to include specific types
 use crate::types::{BranchName, CommitHash, GitUrl, Remote, Stash, Tag}; // Added specific types
-use crate::error::GitError; // Keep error import
 use std::path::PathBuf;
 use std::str::FromStr; // Needed for parsing within models
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -3,11 +3,8 @@
 use crate::error::GitError;
 // Import specific types for integration
 use crate::types::{BranchName, CommitHash, GitUrl, Remote, Result}; // Added CommitHash, Remote
-use crate::models::{ // Assuming models are updated based on previous review
-                     Commit, StatusEntry, FileStatus, Branch, StatusResult, RemoteInfo, TagInfo,
-                     StashEntry, Worktree, BlameLine, DiffResult, DiffFile, DiffHunk,
-                     DiffLine, DiffLineType, ConfigEntry, ConfigScope, Submodule, LogResult,
-                     Reference, ReferenceType // Assuming TagInfo/RemoteInfo rename in models.rs
+use crate::models::{
+                     Commit, StatusEntry, FileStatus, Branch, StatusResult,
 };
 use std::ffi::OsStr;
 use std::io::ErrorKind; // Needed for GitNotFound check

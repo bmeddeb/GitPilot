@@ -8,11 +8,8 @@ use std::path::Path;
 use std::str::FromStr;
 use tokio::fs;
 
-// Update use statements (adjust crate name 'GitPilot' if necessary)
 use GitPilot::AsyncRepository;
-use GitPilot::error::GitError; // Assuming GitError is pub
-use GitPilot::models::{Commit, StatusResult}; // Import models used
-use GitPilot::types::{BranchName, CommitHash, GitUrl, Remote, Result as GitResult}; // Import types used
+use GitPilot::types::{BranchName, GitUrl}; // Import types used
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

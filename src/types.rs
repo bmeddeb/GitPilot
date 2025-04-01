@@ -4,7 +4,7 @@ use once_cell::sync::Lazy; // Import Lazy
 use regex::Regex;
 #[cfg(feature = "serde")]
 use serde::{de, Deserialize, Deserializer};
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash};
 use std::str::FromStr;
 use std::{
     ffi::OsStr, // Import OsStr

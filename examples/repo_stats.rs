@@ -8,13 +8,13 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::collections::HashMap;
-use chrono::{DateTime, Local, TimeZone}; // Make sure chrono is in Cargo.toml for the example
+use chrono::{Local, TimeZone};
 
 // Import the GitPilot library
 use GitPilot::Repository;
 // Updated imports
-use GitPilot::types::{GitUrl, BranchName, Remote, CommitHash, Result as GitResult};
-use GitPilot::models::{Commit, StatusResult, FileStatus, Branch}; // Import specific models used
+use GitPilot::types::{GitUrl};
+use GitPilot::models::{FileStatus};
 
 // Struct definitions remain the same
 struct CommitStats {

@@ -6,7 +6,6 @@ use crate::types::{BranchName, CommitHash, GitUrl, Remote, Result}; // Added Com
 use crate::models::*;
 use std::env;
 use std::ffi::OsStr;
-use std::fmt::Write; // Used in get_commit's format string, keep it
 use std::io::ErrorKind; // Needed for GitNotFound check
 use std::path::{Path, PathBuf};
 use std::process::Command;
