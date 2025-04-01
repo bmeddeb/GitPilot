@@ -134,16 +134,20 @@ const INVALID_REFERENCE_END: &str = ".";
 /// See: https://git-scm.com/docs/git-check-ref-format
 fn is_valid_reference_name(name: &str) -> bool {
     !name.is_empty() // Cannot be empty
-        && !name.starts_with(INVALID_REFERENCE_START)
-        && !name.ends_with(INVALID_REFERENCE_END)
+        && !name.starts_with(INVALID_REFERENCE_START) // Cannot start with "-"
+        && !name.starts_with('.') // <--- ADD THIS: Cannot start with "."
+        && !name.starts_with('/') // <--- ADD THIS: Cannot start with "/"
+        && !name.ends_with(INVALID_REFERENCE_END)   // Cannot end with "."
+        && !name.ends_with('/')   // <--- ADD THIS: Cannot end with "/"
         && name.chars().all(|c| {
-            !c.is_ascii_control() && INVALID_REFERENCE_CHARS.iter().all(|invalid| c != *invalid)
-        })
+        !c.is_ascii_control() && INVALID_REFERENCE_CHARS.iter().all(|invalid| c != *invalid)
+    })
         && !name.contains("/.")
         && !name.contains("@{")
         && !name.contains("..")
         && name != "@"
-        // Further rule: Cannot contain sequences like //, /*, ?, [*] - simplified check
+        // Rule: Cannot contain consecutive /'s (checked by !name.contains("//"))
+        // Rule: Cannot contain sequence /*, ?, [ (checked below)
         && !name.contains("//") && !name.contains("/*") && !name.contains('?') && !name.contains('[') && !name.contains(']')
 }
 // --- CommitHash Type ---

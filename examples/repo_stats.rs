@@ -1,3 +1,5 @@
+// examples/repo_stats.rs
+//
 // This example demonstrates how to use the GitPilot library to analyze a Git repository
 // and generate statistics about it.
 
@@ -8,7 +10,7 @@ use std::str::FromStr;
 use std::collections::HashMap;
 use chrono::{DateTime, Local, TimeZone};
 
-// Update the import paths to match your crate name
+// Import the GitPilot library
 use GitPilot::Repository;
 use GitPilot::types::{GitUrl, BranchName, Result as GitResult};
 use GitPilot::models::{Commit, DiffLineType};
@@ -70,42 +72,89 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Get remote URLs
-    let remotes = repo.list_remotes()?;
+    let remotes = match repo.list_remotes() {
+        Ok(remote_names) => {
+            let mut remote_urls = Vec::new();
+            for name in remote_names {
+                if let Ok(url) = repo.show_remote_uri(&name) {
+                    remote_urls.push((name, url));
+                }
+            }
+            remote_urls
+        },
+        Err(_) => Vec::new(),
+    };
+
     println!("\nRemotes:");
-    for remote in &remotes {
-        println!("  {} -> {}", remote.name(), remote.url);
+    for (name, url) in &remotes {
+        println!("  {} -> {}", name, url);
     }
 
-    // Get commit history (limited to 100 commits for this example)
-    let log_result = repo.log_parsed(Some(100), None)?;
-    println!("\nFound {} commits", log_result.commits.len());
+    // Get HEAD commit
+    match repo.get_commit(None) {
+        Ok(head_commit) => {
+            println!("\nCurrent HEAD:");
+            println!("  Commit: {} ({})",
+                     head_commit.short_hash,
+                     Local.timestamp_opt(head_commit.timestamp as i64, 0)
+                         .unwrap()
+                         .format("%Y-%m-%d %H:%M:%S")
+            );
+            println!("  Author: {} <{}>", head_commit.author_name, head_commit.author_email);
+            println!("  Message: {}", head_commit.message);
+        },
+        Err(e) => eprintln!("Failed to get HEAD commit: {}", e),
+    }
 
     // Calculate commit statistics
+    println!("\nAnalyzing repository history...");
+
+    // Get all commits
+    let log_output = repo.cmd_out(["log", "--format=%H"])?;
+    let total_commits = log_output.len();
+    println!("Total commits: {}", total_commits);
+
+    // Limiting to 100 commits for performance
+    let limit = std::cmp::min(100, total_commits);
+    println!("Analyzing last {} commits", limit);
+
     let mut commit_stats = Vec::new();
-    for commit in &log_result.commits {
-        // For each commit, calculate the diff statistics
-        let mut stats = CommitStats {
-            author: commit.author_name.clone(),
-            timestamp: commit.timestamp,
-            added_lines: 0,
-            removed_lines: 0,
-            files_changed: 0,
-        };
+    for i in 0..limit {
+        let commit_hash = &log_output[i];
 
-        // If this is not the first commit, calculate diff with the parent
-        if !commit.parents.is_empty() {
-            let parent = &commit.parents[0];
-            let diff_result = repo.diff_parsed(Some(parent), Some(&commit.hash), None)?;
+        // Get commit details
+        if let Ok(commit) = repo.get_commit(Some(commit_hash)) {
+            // For each commit, calculate the diff statistics
+            let mut stats = CommitStats {
+                author: commit.author_name.clone(),
+                timestamp: commit.timestamp,
+                added_lines: 0,
+                removed_lines: 0,
+                files_changed: 0,
+            };
 
-            stats.files_changed = diff_result.files.len();
+            // If this is not the first commit, calculate diff with the parent
+            if !commit.parents.is_empty() {
+                let parent = &commit.parents[0];
+                let diff_output = repo.cmd_out(["diff", "--numstat", parent, commit_hash])?;
 
-            for file in &diff_result.files {
-                stats.added_lines += file.added_lines;
-                stats.removed_lines += file.removed_lines;
+                stats.files_changed = diff_output.len();
+
+                for diff_line in diff_output {
+                    let parts: Vec<&str> = diff_line.split_whitespace().collect();
+                    if parts.len() >= 3 {
+                        if let Ok(added) = parts[0].parse::<usize>() {
+                            stats.added_lines += added;
+                        }
+                        if let Ok(removed) = parts[1].parse::<usize>() {
+                            stats.removed_lines += removed;
+                        }
+                    }
+                }
             }
-        }
 
-        commit_stats.push(stats);
+            commit_stats.push(stats);
+        }
     }
 
     // Aggregate statistics by author
@@ -116,8 +165,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             added_lines: 0,
             removed_lines: 0,
             files_changed: 0,
-            first_commit: stats.timestamp,
-            last_commit: stats.timestamp,
+            first_commit: std::u64::MAX,
+            last_commit: 0,
         });
 
         entry.commits += 1;
@@ -134,7 +183,8 @@ fn main() -> Result<(), Box<dyn Error>> {
              "Author", "Commits", "Added", "Removed", "First Commit", "Last Commit");
     println!("{}", "-".repeat(80));
 
-    for (author, stats) in author_stats {
+    // Fixed: Use a reference to author_stats to avoid moving it
+    for (author, stats) in &author_stats {
         let first_date = Local.timestamp_opt(stats.first_commit as i64, 0)
             .unwrap()
             .format("%Y-%m-%d")
@@ -148,23 +198,66 @@ fn main() -> Result<(), Box<dyn Error>> {
                  author, stats.commits, stats.added_lines, stats.removed_lines, first_date, last_date);
     }
 
+    // Calculate overall statistics
+    let total_authors = author_stats.len();
+    let total_added = commit_stats.iter().map(|s| s.added_lines).sum::<usize>();
+    let total_removed = commit_stats.iter().map(|s| s.removed_lines).sum::<usize>();
+    let total_changed_files = commit_stats.iter().map(|s| s.files_changed).sum::<usize>();
+
+    println!("\nOverall Statistics:");
+    println!("  Total commits analyzed: {}", commit_stats.len());
+    println!("  Total authors: {}", total_authors);
+    println!("  Total lines added: {}", total_added);
+    println!("  Total lines removed: {}", total_removed);
+    println!("  Total files changed: {}", total_changed_files);
+
     // Calculate commit frequency
-    let time_span = if let (Some(latest), Some(earliest)) = (
+    if let (Some(latest), Some(earliest)) = (
         commit_stats.iter().map(|s| s.timestamp).max(),
         commit_stats.iter().map(|s| s.timestamp).min()
     ) {
         let days = (latest - earliest) as f64 / (60.0 * 60.0 * 24.0);
         if days > 0.0 {
             let commits_per_day = commit_stats.len() as f64 / days;
-            println!("\nCommit frequency: {:.2} commits per day over {:.1} days",
+            println!("  Commit frequency: {:.2} commits per day over {:.1} days",
                      commits_per_day, days);
         }
-    };
+    }
 
-    // Get current status
-    let status = repo.status()?;
-    println!("\nCurrent Repository Status:");
-    println!("{}", Repository::format_status(&status));
+    // Get current repository status
+    match repo.status() {
+        Ok(status) => {
+            println!("\nCurrent Repository Status:");
+            if status.is_clean {
+                println!("  Working directory is clean");
+            } else {
+                println!("  Modified files: {}", status.files.len());
 
+                for entry in &status.files {
+                    let status_str = match entry.status {
+                        GitPilot::models::FileStatus::Modified => "modified",
+                        GitPilot::models::FileStatus::Added => "added",
+                        GitPilot::models::FileStatus::Deleted => "deleted",
+                        GitPilot::models::FileStatus::DeletedStaged => "deleted (staged)",
+                        GitPilot::models::FileStatus::Untracked => "untracked",
+                        _ => "other",
+                    };
+
+                    println!("    {}: {}", status_str, entry.path.display());
+                }
+            }
+
+            if status.merging {
+                println!("  Repository is currently in the middle of a merge");
+            }
+
+            if status.rebasing {
+                println!("  Repository is currently in the middle of a rebase");
+            }
+        },
+        Err(e) => eprintln!("Failed to get repository status: {}", e),
+    }
+
+    println!("\nAnalysis complete!");
     Ok(())
 }

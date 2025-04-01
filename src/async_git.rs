@@ -266,6 +266,16 @@ impl AsyncRepository {
     ///
     /// # Errors
     /// Returns `GitError` if the operation fails or `git` cannot be executed.
+    /// Gets detailed information about a commit.
+    ///
+    /// # Arguments
+    /// * `commit_ref` - The commit reference. If `None`, uses HEAD.
+    ///
+    /// # Returns
+    /// A `Commit` struct with commit details.
+    ///
+    /// # Errors
+    /// Returns `GitError` if the operation fails or `git` cannot be executed.
     pub async fn get_commit(&self, commit_ref: Option<&str>) -> Result<Commit> {
         let format = "%H%n\
                      shortcommit %h%n\
@@ -275,10 +285,18 @@ impl AsyncRepository {
                      %P%n\
                      message %s";
 
+        // --- FIX START ---
+        // Create the formatted string and store it in a variable
+        // This variable (`format_arg`) lives long enough for the `args` vector
+        let format_arg = format!("--format={}", format);
+
         let args = match commit_ref {
-            Some(c) => vec!["show", "--no-patch", &format!("--format={}", format), c],
-            None => vec!["show", "--no-patch", &format!("--format={}", format)],
+            // Now, borrow the longer-lived `format_arg` string
+            Some(c) => vec!["show", "--no-patch", &format_arg, c],
+            // Borrow the longer-lived `format_arg` string here too
+            None => vec!["show", "--no-patch", &format_arg],
         };
+        // --- FIX END ---
 
         execute_git_fn_async(&self.location, args, |output| {
             Commit::from_show_format(output).ok_or_else(|| GitError::GitError {
