@@ -1,14 +1,17 @@
 //! Provides the core Repository implementation.
 
 use crate::error::GitError;
-use crate::types::{BranchName, GitUrl, Result};
+// Import specific types for integration
+use crate::types::{BranchName, CommitHash, GitUrl, Remote, Result}; // Added CommitHash, Remote
 use crate::models::*;
 use std::env;
 use std::ffi::OsStr;
-use std::fmt::Write;
+use std::fmt::Write; // Used in get_commit's format string, keep it
+use std::io::ErrorKind; // Needed for GitNotFound check
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::str;
+use std::str::{self, FromStr}; // Added FromStr for parsing
+
 
 /// Represents a local Git repository located at a specific path.
 ///
@@ -37,20 +40,15 @@ impl Repository {
     /// Equivalent to `git clone <url> <path>`.
     ///
     /// # Arguments
-    /// * `url` - The URL of the remote repository (`GitUrl` ensures basic format validity).
+    /// * `url` - The URL of the remote repository.
     /// * `p` - The target local path where the repository should be cloned.
     ///
     /// # Errors
-    /// Returns `GitError` if:
-    /// * The `git` command fails (e.g., network error, invalid URL, path exists and is not empty).
-    /// * The `git` executable cannot be found or executed.
-    /// * The working directory is inaccessible.
-    /// * Git output cannot be decoded.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn clone<P: AsRef<Path>>(url: GitUrl, p: P) -> Result<Repository> {
         let p_ref = p.as_ref();
         let cwd = env::current_dir().map_err(|_| GitError::WorkingDirectoryInaccessible)?;
 
-        // Pass URL and Path directly as OsStr compatible args
         let args: Vec<&OsStr> = vec!["clone".as_ref(), url.as_ref(), p_ref.as_os_str()];
 
         execute_git(cwd, args)?; // Execute in CWD, cloning *into* p
@@ -68,10 +66,10 @@ impl Repository {
     /// * `p` - The path to the directory to initialize.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git init` command fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn init<P: AsRef<Path>>(p: P) -> Result<Repository> {
         let p_ref = p.as_ref();
-        execute_git(&p_ref, &["init"])?; // Execute 'git init' within the target dir
+        execute_git(&p_ref, &["init"])?;
         Ok(Repository {
             location: PathBuf::from(p_ref),
         })
@@ -82,14 +80,14 @@ impl Repository {
     /// Equivalent to `git checkout -b <branch_name>`.
     ///
     /// # Arguments
-    /// * `branch_name` - The name for the new branch (`BranchName` ensures basic format validity).
+    /// * `branch_name` - The name for the new branch.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git checkout` command fails (e.g., branch already exists) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn create_local_branch(&self, branch_name: &BranchName) -> Result<()> {
         execute_git(
             &self.location,
-            &["checkout", "-b", branch_name.as_ref()], // Use AsRef<str> -> AsRef<OsStr>
+            &["checkout", "-b", branch_name.as_ref()],
         )
     }
 
@@ -101,7 +99,7 @@ impl Repository {
     /// * `branch_name` - The name of the branch to switch to.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git checkout` command fails (e.g., branch doesn't exist, uncommitted changes) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn switch_branch(&self, branch_name: &BranchName) -> Result<()> {
         execute_git(&self.location, &["checkout", branch_name.as_ref()])
     }
@@ -111,10 +109,10 @@ impl Repository {
     /// Equivalent to `git add <pathspec>...`.
     ///
     /// # Arguments
-    /// * `pathspecs` - A vector of file paths or patterns (e.g., `"."`, `"src/main.rs"`) to add.
+    /// * `pathspecs` - A vector of file paths or patterns to add.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git add` command fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn add<S: AsRef<OsStr>>(&self, pathspecs: Vec<S>) -> Result<()> {
         let mut args: Vec<&OsStr> = Vec::with_capacity(pathspecs.len() + 1);
         args.push("add".as_ref());
@@ -133,7 +131,7 @@ impl Repository {
     /// * `force` - If `true`, corresponds to the `-f` flag (force removal).
     ///
     /// # Errors
-    /// Returns `GitError` if the `git rm` command fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn remove<S: AsRef<OsStr>>(&self, pathspecs: Vec<S>, force: bool) -> Result<()> {
         let mut args: Vec<&OsStr> = Vec::with_capacity(pathspecs.len() + 2);
         args.push("rm".as_ref());
@@ -149,14 +147,12 @@ impl Repository {
     /// Stages all tracked, modified/deleted files and commits them.
     ///
     /// Equivalent to `git commit -am <message>`.
-    /// **Note:** This does *not* stage new (untracked) files. Use `add` first for those.
-    /// Use `commit_staged` to commit only what is already staged.
     ///
     /// # Arguments
     /// * `message` - The commit message.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git commit` command fails (e.g., nothing to commit, conflicts) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn stage_and_commit_all_modified(&self, message: &str) -> Result<()> {
         execute_git(&self.location, &["commit", "-am", message])
     }
@@ -164,13 +160,12 @@ impl Repository {
     /// Commits files currently in the staging area (index).
     ///
     /// Equivalent to `git commit -m <message>`.
-    /// Does not automatically stage any files. Use `add` beforehand.
     ///
     /// # Arguments
     /// * `message` - The commit message.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git commit` command fails (e.g., nothing staged, conflicts) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn commit_staged(&self, message: &str) -> Result<()> {
         execute_git(&self.location, &["commit", "-m", message])
     }
@@ -178,10 +173,9 @@ impl Repository {
     /// Pushes the current branch to its configured upstream remote branch.
     ///
     /// Equivalent to `git push`.
-    /// Requires the current branch to have a configured upstream.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git push` command fails (e.g., no upstream, network error, rejected push) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn push(&self) -> Result<()> {
         execute_git(&self.location, &["push"])
     }
@@ -191,19 +185,24 @@ impl Repository {
     /// Equivalent to `git push -u <upstream_remote> <upstream_branch>`.
     ///
     /// # Arguments
-    /// * `upstream_remote` - The name of the remote (e.g., "origin").
+    /// * `upstream_remote` - The name of the remote.
     /// * `upstream_branch` - The name of the branch on the remote.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git push` command fails (e.g., invalid remote/branch, network error, rejected push) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn push_to_upstream(
         &self,
-        upstream_remote: &str,
+        upstream_remote: &Remote, // Changed type
         upstream_branch: &BranchName,
     ) -> Result<()> {
         execute_git(
             &self.location,
-            &["push", "-u", upstream_remote, upstream_branch.as_ref()],
+            &[
+                "push",
+                "-u",
+                upstream_remote.as_ref(), // Use AsRef
+                upstream_branch.as_ref(),
+            ],
         )
     }
 
@@ -212,13 +211,13 @@ impl Repository {
     /// Equivalent to `git remote add <name> <url>`.
     ///
     /// # Arguments
-    /// * `name` - The name for the new remote (e.g., "origin", "upstream").
+    /// * `name` - The name for the new remote.
     /// * `url` - The URL of the remote repository.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git remote add` command fails (e.g., remote name already exists) or `git` cannot be executed.
-    pub fn add_remote(&self, name: &str, url: &GitUrl) -> Result<()> {
-        execute_git(&self.location, &["remote", "add", name, url.as_ref()])
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn add_remote(&self, name: &Remote, url: &GitUrl) -> Result<()> { // Changed type
+        execute_git(&self.location, &["remote", "add", name.as_ref(), url.as_ref()]) // Use AsRef
     }
 
     /// Fetches updates from a specified remote repository.
@@ -229,9 +228,9 @@ impl Repository {
     /// * `remote` - The name of the remote to fetch from.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git fetch` command fails (e.g., invalid remote, network error) or `git` cannot be executed.
-    pub fn fetch_remote(&self, remote: &str) -> Result<()> {
-        execute_git(&self.location, &["fetch", remote])
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn fetch_remote(&self, remote: &Remote) -> Result<()> { // Changed type
+        execute_git(&self.location, &["fetch", remote.as_ref()]) // Use AsRef
     }
 
     /// Creates and checks out a new branch starting from a given point (e.g., another branch, commit hash, tag).
@@ -243,18 +242,18 @@ impl Repository {
     /// * `startpoint` - The reference to branch from (e.g., "main", "origin/main", "v1.0", commit hash).
     ///
     /// # Errors
-    /// Returns `GitError` if the `git checkout` command fails (e.g., invalid startpoint, branch already exists) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn create_branch_from_startpoint(
         &self,
         branch_name: &BranchName,
-        startpoint: &str,
+        startpoint: &str, // Keeping as &str for flexibility
     ) -> Result<()> {
         execute_git(
             &self.location,
             &[
                 "checkout",
                 "-b",
-                branch_name.as_ref(), // Use AsRef directly
+                branch_name.as_ref(),
                 startpoint,
             ],
         )
@@ -265,56 +264,24 @@ impl Repository {
     /// Equivalent to `git branch --format='%(refname:short)'`.
     ///
     /// # Returns
-    /// A `Vec<String>` containing the branch names.
+    /// A `Vec<BranchName>` containing the branch names.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git branch` command fails or `git` cannot be executed.
-    pub fn list_branches(&self) -> Result<Vec<String>> {
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn list_branches(&self) -> Result<Vec<BranchName>> { // Changed return type
         execute_git_fn(
             &self.location,
-            &["branch", "--list", "--format=%(refname:short)"], // Added --list for clarity
-            |output| Ok(output.lines().map(|line| line.to_owned()).collect()),
+            &["branch", "--list", "--format=%(refname:short)"],
+            |output| {
+                output
+                    .lines()
+                    .map(|line| BranchName::from_str(line.trim())) // Parse each line
+                    .collect::<Result<Vec<BranchName>>>() // Collect into Result<Vec<...>>
+            },
         )
     }
 
-    /// Lists files currently staged for commit (added).
-    ///
-    /// Parses the output of `git status -s`.
-    ///
-    /// # Returns
-    /// A `Vec<String>` containing the paths of added files relative to the repository root.
-    ///
-    /// # Errors
-    /// Returns `GitError` if the `git status` command fails or `git` cannot be executed.
-    pub fn list_added(&self) -> Result<Vec<String>> {
-        git_status(&self, "A") // Status code for Added
-    }
-
-    /// Lists tracked files that have been modified but not staged.
-    ///
-    /// Parses the output of `git status -s`.
-    ///
-    /// # Returns
-    /// A `Vec<String>` containing the paths of modified files relative to the repository root.
-    ///
-    /// # Errors
-    /// Returns `GitError` if the `git status` command fails or `git` cannot be executed.
-    pub fn list_modified(&self) -> Result<Vec<String>> {
-        git_status(&self, " M") // Status code for Modified (note space)
-    }
-
-    /// Lists files that are not tracked by Git.
-    ///
-    /// Parses the output of `git status -s`.
-    ///
-    /// # Returns
-    /// A `Vec<String>` containing the paths of untracked files relative to the repository root.
-    ///
-    /// # Errors
-    /// Returns `GitError` if the `git status` command fails or `git` cannot be executed.
-    pub fn list_untracked(&self) -> Result<Vec<String>> {
-        git_status(&self, "??") // Status code for Untracked
-    }
+    // Removed list_added, list_modified, list_untracked. Use status() instead.
 
     /// Lists all files currently tracked by Git in the working directory.
     ///
@@ -324,7 +291,7 @@ impl Repository {
     /// A `Vec<String>` containing the paths of tracked files relative to the repository root.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git ls-files` command fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn list_tracked(&self) -> Result<Vec<String>> {
         execute_git_fn(&self.location, &["ls-files"], |output| {
             Ok(output.lines().map(|line| line.to_owned()).collect())
@@ -336,51 +303,52 @@ impl Repository {
     /// Equivalent to `git config --get remote.<remote_name>.url`.
     ///
     /// # Arguments
-    /// * `remote_name` - The name of the remote (e.g., "origin").
+    /// * `remote_name` - The name of the remote.
     ///
     /// # Returns
-    /// The URL as a `String`.
+    /// The URL as a `GitUrl`.
     ///
     /// # Errors
-    /// Returns `GitError` if the command fails (e.g., remote doesn't exist, no URL configured) or `git` cannot be executed.
-    pub fn show_remote_uri(&self, remote_name: &str) -> Result<String> {
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn show_remote_uri(&self, remote_name: &Remote) -> Result<GitUrl> { // Changed args & return type
         execute_git_fn(
             &self.location,
             &[
                 "config",
                 "--get",
-                &format!("remote.{}.url", remote_name), // format! creates String, which is AsRef<OsStr>
+                // --- FIX: Pass remote_name directly ---
+                // format! uses the Display trait implementation for Remote
+                &format!("remote.{}.url", remote_name),
             ],
-            |output| Ok(output.trim().to_owned()),
+            |output| GitUrl::from_str(output.trim()), // Parse output into GitUrl
         )
     }
 
     /// Lists the names of all configured remotes.
     ///
-    /// Equivalent to `git remote show`.
+    /// Equivalent to `git remote`.
     ///
     /// # Returns
-    /// A `Vec<String>` containing the remote names.
+    /// A `Vec<Remote>` containing the remote names.
     ///
     /// # Errors
     /// Returns `GitError::NoRemoteRepositorySet` if no remotes are configured.
-    /// Returns other `GitError` variants if the command fails or `git` cannot be executed.
-    pub fn list_remotes(&self) -> Result<Vec<String>> {
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn list_remotes(&self) -> Result<Vec<Remote>> { // Changed return type
         execute_git_fn(&self.location, &["remote"], |output| {
-            // Simpler: 'git remote' lists names
-            let remotes: Vec<String> = output.lines().map(|line| line.trim().to_owned()).collect();
-            if remotes.is_empty() {
-                // Check config instead, as 'git remote' might succeed with no output
-                // A better check might be trying to list remote URLs or use a plumbing command
-                // For now, assume empty output means no remotes, but add a check.
+            let remote_names: Vec<&str> = output.lines().map(|line| line.trim()).collect();
+            if remote_names.is_empty() {
                 let config_check = self.cmd_out(["config", "--get-regexp", r"^remote\..*\.url"]);
                 match config_check {
                     Ok(lines) if lines.is_empty() => Err(GitError::NoRemoteRepositorySet),
-                    Ok(_) => Ok(remotes), // Remotes exist even if 'git remote' was empty (unlikely)
-                    Err(e) => Err(e),     // Propagate config check error
+                    Ok(_) => Ok(Vec::new()),
+                    Err(e) => Err(e),
                 }
             } else {
-                Ok(remotes)
+                remote_names
+                    .into_iter()
+                    .map(Remote::from_str) // Parse each name
+                    .collect::<Result<Vec<Remote>>>() // Collect into Result<Vec<...>>
             }
         })
     }
@@ -393,27 +361,30 @@ impl Repository {
     /// * `short` - If `true`, returns the abbreviated short hash.
     ///
     /// # Returns
-    /// The commit hash as a `String`.
+    /// The commit hash as a `CommitHash`.
     ///
     /// # Errors
-    /// Returns `GitError` if the `git rev-parse` command fails (e.g., not a Git repository, no commits yet) or `git` cannot be executed.
-    pub fn get_hash(&self, short: bool) -> Result<String> {
+    /// Returns `GitError` (including `GitNotFound`).
+    pub fn get_hash(&self, short: bool) -> Result<CommitHash> { // Changed return type
         let args: &[&str] = if short {
             &["rev-parse", "--short", "HEAD"]
         } else {
             &["rev-parse", "HEAD"]
         };
-        execute_git_fn(&self.location, args, |output| Ok(output.trim().to_owned()))
+        execute_git_fn(
+            &self.location,
+            args,
+            |output| CommitHash::from_str(output.trim()), // Parse output
+        )
     }
 
     /// Executes an arbitrary Git command within the repository context.
-    /// Does not capture or process output (useful for commands with side-effects only).
     ///
     /// # Arguments
-    /// * `args` - An iterator yielding command-line arguments for Git (e.g., `["log", "--oneline"]`).
+    /// * `args` - An iterator yielding command-line arguments for Git.
     ///
     /// # Errors
-    /// Returns `GitError` if the command fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn cmd<I, S>(&self, args: I) -> Result<()>
     where
         I: IntoIterator<Item = S>,
@@ -422,7 +393,7 @@ impl Repository {
         execute_git(&self.location, args)
     }
 
-    /// Executes an arbitrary Git command within the repository context and returns its standard output.
+    /// Executes an arbitrary Git command and returns its standard output.
     ///
     /// # Arguments
     /// * `args` - An iterator yielding command-line arguments for Git.
@@ -431,7 +402,7 @@ impl Repository {
     /// A `Vec<String>` where each element is a line from the command's standard output.
     ///
     /// # Errors
-    /// Returns `GitError` if the command fails, `git` cannot be executed, or output is not valid UTF-8.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn cmd_out<I, S>(&self, args: I) -> Result<Vec<String>>
     where
         I: IntoIterator<Item = S>,
@@ -450,10 +421,10 @@ impl Repository {
     /// * `commit_ref` - The commit reference (hash, branch name, etc.). If `None`, uses HEAD.
     ///
     /// # Returns
-    /// A `Commit` struct with commit details.
+    /// A `Commit` struct with commit details. (Note: Assumes Commit model fields updated)
     ///
     /// # Errors
-    /// Returns `GitError` if the operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn get_commit(&self, commit_ref: Option<&str>) -> Result<Commit> {
         let format = "%H%n\
                      shortcommit %h%n\
@@ -480,19 +451,18 @@ impl Repository {
     /// Gets the current status of the repository.
     ///
     /// # Returns
-    /// A `StatusResult` struct with status details.
+    /// A `StatusResult` struct with status details. (Note: Assumes StatusResult fields updated)
     ///
     /// # Errors
-    /// Returns `GitError` if the operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn status(&self) -> Result<StatusResult> {
-        // Get the porcelain status
         let porcelain_output = execute_git_fn(
             &self.location,
             &["status", "--porcelain=v2", "--branch"],
             |output| Ok(output.to_string())
         )?;
 
-        let mut branch = None;
+        let mut branch_name_str = None;
         let mut files = Vec::new();
         let mut merging = false;
         let mut rebasing = false;
@@ -500,74 +470,39 @@ impl Repository {
 
         for line in porcelain_output.lines() {
             if line.starts_with("# branch.head ") {
-                branch = Some(line.trim_start_matches("# branch.head ").to_string());
-            } else if line.starts_with("# branch.oid ") {
-                // Branch object id, we could store this if needed
-            } else if line.starts_with("# branch.upstream ") {
-                // Upstream branch, we could store this if needed
+                branch_name_str = Some(line.trim_start_matches("# branch.head ").to_string());
+            } else if line.starts_with("# branch.oid ") { // Ignore
+            } else if line.starts_with("# branch.upstream ") { // Ignore
             } else if line.starts_with("1 ") || line.starts_with("2 ") || line.starts_with("u ") {
-                // Parse file status
                 let parts: Vec<&str> = line.split(' ').collect();
                 if parts.len() >= 2 {
-                    let status_code = if parts[0] == "1" && parts.len() >= 3 {
-                        // Ordinary changed entries format: 1 XY path
-                        let xy = parts[1];
-                        if xy.len() >= 2 {
-                            (xy.chars().nth(0).unwrap(), xy.chars().nth(1).unwrap())
-                        } else {
-                            (' ', ' ')
-                        }
-                    } else if parts[0] == "2" && parts.len() >= 9 {
-                        // Renamed/copied entries format: 2 XY path1 path2
-                        let xy = parts[1];
-                        if xy.len() >= 2 {
-                            (xy.chars().nth(0).unwrap(), xy.chars().nth(1).unwrap())
-                        } else {
-                            (' ', ' ')
-                        }
-                    } else if parts[0] == "u" && parts.len() >= 5 {
-                        // Unmerged entries format: u XY subtype path
-                        let xy = parts[1];
-                        if xy.len() >= 2 {
-                            (xy.chars().nth(0).unwrap(), xy.chars().nth(1).unwrap())
-                        } else {
-                            (' ', ' ')
-                        }
+                    let xy = parts[1];
+                    let status_code = if xy.len() >= 2 {
+                        (xy.chars().nth(0).unwrap(), xy.chars().nth(1).unwrap())
                     } else {
                         (' ', ' ')
                     };
-
                     let status = FileStatus::from_porcelain_code(status_code.0, status_code.1);
 
-                    let path_index = if parts[0] == "1" {
-                        2 // For ordinary changes
-                    } else if parts[0] == "2" {
-                        3 // For renamed/copied entries, path2 is at index 3
-                    } else if parts[0] == "u" {
-                        4 // For unmerged entries
-                    } else {
-                        2 // Default
-                    };
+                    // Simplified path parsing - assumes no NUL separators needed for now
+                    let path_part = line.split('\t').next().unwrap_or(line);
+                    let path_components: Vec<&str> = path_part.split(' ').collect();
 
-                    if parts.len() > path_index {
-                        let path = parts[path_index].to_string();
-
-                        let original_path = if parts[0] == "2" && parts.len() > 2 {
-                            // For renamed/copied entries, path1 is the original path
-                            Some(PathBuf::from(parts[2]))
+                    if let Some(path_str) = path_components.iter().rev().find(|s| !s.is_empty()) {
+                        let original_path_str = if line.contains('\t') {
+                            line.split('\t').nth(1)
                         } else {
                             None
                         };
 
                         files.push(StatusEntry {
-                            path: PathBuf::from(path),
+                            path: PathBuf::from(path_str),
                             status,
-                            original_path,
+                            original_path: original_path_str.map(PathBuf::from),
                         });
                     }
                 }
             } else if line.starts_with("? ") {
-                // Untracked file
                 if line.len() > 2 {
                     let path = line[2..].to_string();
                     files.push(StatusEntry {
@@ -579,41 +514,40 @@ impl Repository {
             }
         }
 
+        // Parse the branch name string into Option<BranchName>
+        let branch = branch_name_str.and_then(|s| BranchName::from_str(&s).ok());
+
         // Check for special states
         let git_dir = self.location.join(".git");
+        if std::path::Path::new(&git_dir.join("MERGE_HEAD")).exists() { merging = true; }
+        if std::path::Path::new(&git_dir.join("rebase-apply")).exists() || std::path::Path::new(&git_dir.join("rebase-merge")).exists() { rebasing = true; }
+        if std::path::Path::new(&git_dir.join("CHERRY_PICK_HEAD")).exists() { cherry_picking = true; }
 
-        if std::path::Path::new(&git_dir.join("MERGE_HEAD")).exists() {
-            merging = true;
-        }
+        // Determine if clean (ignoring untracked/ignored)
+        let is_clean = files.iter().all(|f|
+            matches!(f.status, FileStatus::Unmodified | FileStatus::Ignored)
+        );
 
-        if std::path::Path::new(&git_dir.join("rebase-apply")).exists()
-            || std::path::Path::new(&git_dir.join("rebase-merge")).exists() {
-            rebasing = true;
-        }
-
-        if std::path::Path::new(&git_dir.join("CHERRY_PICK_HEAD")).exists() {
-            cherry_picking = true;
-        }
-
-        let is_clean = files.is_empty();
-
+        // --- FIX: Removed duplicate field and incorrect mapping ---
         Ok(StatusResult {
-            branch,
+            branch: branch, // Assign the Option<BranchName> directly
             files,
             merging,
             rebasing,
             cherry_picking,
             is_clean,
         })
+        // --- End Fix ---
     }
+
 
     /// Lists branches with detailed information.
     ///
     /// # Returns
-    /// A vector of `Branch` structs with branch details.
+    /// A vector of `Branch` structs with branch details. (Note: Assumes Branch fields updated)
     ///
     /// # Errors
-    /// Returns `GitError` if the operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn list_branches_info(&self) -> Result<Vec<Branch>> {
         execute_git_fn(
             &self.location,
@@ -625,7 +559,7 @@ impl Repository {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 3 {
                         let name_str = parts[0];
-                        let commit = parts[1].to_string();
+                        let commit_str = parts[1]; // &str
                         let is_head = parts[2] == "*";
 
                         let upstream = if parts.len() >= 4 {
@@ -634,18 +568,24 @@ impl Repository {
                             None
                         };
 
-                        // Parse the branch name, skipping invalid ones
-                        if let Ok(name) = name_str.parse::<BranchName>() {
-                            branches.push(Branch {
-                                name,
-                                commit,
-                                is_head,
-                                upstream,
-                            });
+                        // --- FIX: Parse commit_str into CommitHash ---
+                        if let Ok(name) = BranchName::from_str(name_str) {
+                            if let Ok(commit_hash) = CommitHash::from_str(commit_str) { // Parse here
+                                branches.push(Branch {
+                                    name,
+                                    commit: commit_hash, // Assign CommitHash
+                                    is_head,
+                                    upstream,
+                                });
+                            } else {
+                                eprintln!("Warning: Could not parse commit hash '{}' for branch '{}'", commit_str, name_str);
+                            }
+                        } else {
+                            eprintln!("Warning: Could not parse branch name '{}'", name_str);
                         }
+                        // --- End Fix ---
                     }
                 }
-
                 Ok(branches)
             }
         )
@@ -657,33 +597,27 @@ impl Repository {
 impl Repository {
     /// Rebases the current branch onto another branch or reference.
     ///
-    /// Equivalent to `git rebase <target_branch>`.
-    ///
     /// # Arguments
     /// * `target_branch` - The branch or reference to rebase onto.
     ///
     /// # Errors
-    /// Returns `GitError` if the rebase operation fails (e.g., conflicts) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn rebase(&self, target_branch: &str) -> Result<()> {
         execute_git(&self.location, &["rebase", target_branch])
     }
 
     /// Continues a rebase operation after resolving conflicts.
     ///
-    /// Equivalent to `git rebase --continue`.
-    ///
     /// # Errors
-    /// Returns `GitError` if the continue operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn rebase_continue(&self) -> Result<()> {
         execute_git(&self.location, &["rebase", "--continue"])
     }
 
     /// Aborts a rebase operation and returns to the pre-rebase state.
     ///
-    /// Equivalent to `git rebase --abort`.
-    ///
     /// # Errors
-    /// Returns `GitError` if the abort operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn rebase_abort(&self) -> Result<()> {
         execute_git(&self.location, &["rebase", "--abort"])
     }
@@ -694,13 +628,11 @@ impl Repository {
 impl Repository {
     /// Cherry-picks one or more commits into the current branch.
     ///
-    /// Equivalent to `git cherry-pick <commit>...`.
-    ///
     /// # Arguments
-    /// * `commits` - A vector of commit references (hashes, branch names, etc.) to cherry-pick.
+    /// * `commits` - A vector of commit references (hashes, branch names, etc.).
     ///
     /// # Errors
-    /// Returns `GitError` if the cherry-pick operation fails (e.g., conflicts) or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn cherry_pick<S: AsRef<OsStr>>(&self, commits: Vec<S>) -> Result<()> {
         let mut args: Vec<&OsStr> = Vec::with_capacity(commits.len() + 1);
         args.push("cherry-pick".as_ref());
@@ -712,20 +644,16 @@ impl Repository {
 
     /// Continues a cherry-pick operation after resolving conflicts.
     ///
-    /// Equivalent to `git cherry-pick --continue`.
-    ///
     /// # Errors
-    /// Returns `GitError` if the continue operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn cherry_pick_continue(&self) -> Result<()> {
         execute_git(&self.location, &["cherry-pick", "--continue"])
     }
 
     /// Aborts a cherry-pick operation.
     ///
-    /// Equivalent to `git cherry-pick --abort`.
-    ///
     /// # Errors
-    /// Returns `GitError` if the abort operation fails or `git` cannot be executed.
+    /// Returns `GitError` (including `GitNotFound`).
     pub fn cherry_pick_abort(&self) -> Result<()> {
         execute_git(&self.location, &["cherry-pick", "--abort"])
     }
@@ -733,31 +661,7 @@ impl Repository {
 
 // --- Helper Functions ---
 
-/// Helper to parse specific lines from `git status -s` output.
-fn git_status(repo: &Repository, prefix: &str) -> Result<Vec<String>> {
-    execute_git_fn(&repo.location, &["status", "--porcelain"], |output| {
-        // --porcelain is more stable than -s
-        Ok(output
-            .lines()
-            // Status codes can be XY PATH or XY ORIG_PATH -> PATH (renames)
-            // We only care about the final path for simple cases.
-            .filter_map(|line| {
-                if line.starts_with(prefix) {
-                    // Handle potential rename "XY ORIG -> NEW" by taking the part after " -> " if present
-                    line.split(" -> ")
-                        .last()
-                        // Otherwise take the part after the status code (XY<space>)
-                        .unwrap_or(&line[prefix.len()..])
-                        .trim_start() // Trim leading space if no rename
-                        .to_owned()
-                        .into() // Convert to Option<String>
-                } else {
-                    None
-                }
-            })
-            .collect())
-    })
-}
+// Removed git_status helper function
 
 /// Executes a Git command, discarding successful output.
 fn execute_git<I, S, P>(p: P, args: I) -> Result<()>
@@ -776,39 +680,39 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
     P: AsRef<Path>,
-    F: FnOnce(&str) -> Result<R>, // Changed to FnOnce as it's called at most once
+    F: FnOnce(&str) -> Result<R>,
 {
-    let process_output = Command::new("git")
+    let command_result = Command::new("git")
         .current_dir(p.as_ref())
         .args(args)
         .output();
 
-    match process_output {
+    match command_result {
         Ok(output) => {
             if output.status.success() {
-                // Attempt to decode stdout as UTF-8
                 match str::from_utf8(&output.stdout) {
-                    Ok(stdout_str) => process(stdout_str), // Process the valid UTF-8 stdout
-                    Err(_) => Err(GitError::Undecodable),  // Stdout wasn't valid UTF-8
+                    Ok(stdout_str) => process(stdout_str),
+                    Err(_) => Err(GitError::Undecodable),
                 }
             } else {
-                // Command failed, try to capture stdout and stderr
                 let stdout = str::from_utf8(&output.stdout)
-                    .map(|s| s.trim_end().to_owned()) // Trim trailing newline
+                    .map(|s| s.trim_end().to_owned())
                     .unwrap_or_else(|_| String::from("[stdout: undecodable UTF-8]"));
                 let stderr = str::from_utf8(&output.stderr)
-                    .map(|s| s.trim_end().to_owned()) // Trim trailing newline
+                    .map(|s| s.trim_end().to_owned())
                     .unwrap_or_else(|_| String::from("[stderr: undecodable UTF-8]"));
-
-                // Return the specific GitError variant with captured output
                 Err(GitError::GitError { stdout, stderr })
             }
         }
         Err(e) => {
-            // Failed to even execute the command (e.g., git not found, permissions)
-            // We could potentially match e.kind() for more specific errors if needed
-            eprintln!("Failed to execute git command: {}", e); // Log the OS error
-            Err(GitError::Execution)
+            // --- Restored GitNotFound Check ---
+            if e.kind() == ErrorKind::NotFound {
+                Err(GitError::GitNotFound) // Return the specific error
+            } else {
+                eprintln!("Failed to execute git command: {}", e); // Log the OS error
+                Err(GitError::Execution) // Return the original generic execution error
+            }
+            // --- End of Restored Check ---
         }
     }
 }
