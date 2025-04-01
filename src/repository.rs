@@ -463,9 +463,10 @@ impl Repository {
                      %P%n\
                      message %s";
 
+        let format_string = format!("--format={}", format);
         let args = match commit_ref {
-            Some(c) => vec!["show", "--no-patch", &format!("--format={}", format), c],
-            None => vec!["show", "--no-patch", &format!("--format={}", format)],
+            Some(c) => vec!["show", "--no-patch", &format_string, c],
+            None => vec!["show", "--no-patch", &format_string],
         };
 
         execute_git_fn(&self.location, args, |output| {
@@ -634,7 +635,7 @@ impl Repository {
                         };
 
                         // Parse the branch name, skipping invalid ones
-                        if let Ok(name) = BranchName::from_str(name_str) {
+                        if let Ok(name) = name_str.parse::<BranchName>() {
                             branches.push(Branch {
                                 name,
                                 commit,

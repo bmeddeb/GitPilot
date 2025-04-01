@@ -10,6 +10,7 @@ use crate::models::{
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str;
+use std::str::FromStr;
 
 // These imports are now guarded by the "async" feature flag
 use tokio::process::Command;
