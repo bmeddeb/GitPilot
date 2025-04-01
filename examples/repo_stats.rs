@@ -70,10 +70,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Get remote URLs
-    let remotes = repo.list_remotes_info()?;
+    let remotes = repo.list_remotes()?;
     println!("\nRemotes:");
     for remote in &remotes {
-        println!("  {} -> {}", remote.name, remote.url);
+        println!("  {} -> {}", remote.name(), remote.url);
     }
 
     // Get commit history (limited to 100 commits for this example)
